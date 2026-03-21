@@ -84,3 +84,21 @@ Crucially, you must use the -ea (Enable Assertions) flag, or Java will skip the 
 
 Bash
 java -ea -cp target/classes:/tmp TestStatus
+
+
+Phase 2 — Ports (The Contracts)
+Before writing a single file, understand what you're doing and why:
+┌─────────────────────────────────────────────────────┐
+│  These interfaces are the CONTRACTS between layers.  │
+│  They define WHAT happens, not HOW it happens.       │
+│                                                      │
+│  INPUT PORT  (OrderUseCase)                          │
+│    ← "What can the outside world ask this service?"  │
+│    ← Controller depends on this                      │
+│                                                      │
+│  OUTPUT PORTS (OrderRepository, InventoryClient)     │
+│    ← "What does the service need from the outside?"  │
+│    ← Service depends on these                        │
+│    ← JPA adapter implements OrderRepository          │
+│    ← Feign adapter implements InventoryClient        │
+└─────────────────────────────────────────────────────┘
