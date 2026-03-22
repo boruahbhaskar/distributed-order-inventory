@@ -18,16 +18,16 @@ mvn dependency:resolve
 
 # Check for dependency conflicts
 mvn dependency:tree | grep -i "conflict\|omitted"
-```
+
 
 **In VS Code** — you should see the Maven sidebar populate:
-```
+
 MAVEN
 └── order-service
     ├── Dependencies (expandable list of all jars)
     ├── Lifecycle
     └── Plugins
-```
+
 
 If the Maven sidebar shows a ⚠️ icon, click it — it'll show exactly which line in `pom.xml` is wrong.
 
@@ -36,7 +36,7 @@ If the Maven sidebar shows a ⚠️ icon, click it — it'll show exactly which 
 ## Step 2 — Create `OrderStatus.java`
 
 Create the file at:
-```
+
 order-service/src/main/java/com/example/orderservice/domain/model/OrderStatus.java
 
 
@@ -148,17 +148,17 @@ The DTO is the right place to validate what the client sends.
 Reason 4: Different operations need different shapes
 
 One entity, many views of it:
-```
+
 Same Order entity → 4 different DTOs:
 
 CreateOrderRequest  → what client sends to CREATE  (no id, no status, no timestamps)
 UpdateOrderRequest  → what client sends to UPDATE   (no id, no timestamps)
 PatchOrderStatusRequest → what client sends to PATCH (just the status field)
 OrderResponse       → what client receives back     (everything including id, timestamps)
-```
+
 
 ## How DTOs Fit in the Overall Flow
-```
+
 HTTP Request (JSON)
       │
       ▼
@@ -299,7 +299,7 @@ public ResponseEntity<?> createOrder(@RequestBody CreateOrderRequest request) {
 
     return ResponseEntity.ok(order);
 }
-```
+
 
 **Problems:**
 - You cannot unit test this without starting an HTTP server, a database, and a Feign client simultaneously
@@ -307,7 +307,7 @@ public ResponseEntity<?> createOrder(@RequestBody CreateOrderRequest request) {
 - One class is doing routing + validation + business logic + persistence — impossible to reason about
 
 **The service layer solves all three:**
-```
+
 Test the business logic   → mock OrderRepository + mock InventoryClient
                             zero Spring, zero HTTP, zero DB
                             runs in milliseconds
@@ -318,14 +318,14 @@ Reuse the logic           → HTTP controller calls service
                             Logic lives in ONE place
 
 Single responsibility      → Controller routes, Service thinks, Repository stores
-```
+
 
 ---
 
 ## The Transaction Boundary — Critical Interview Topic
 
 The service layer owns the **database transaction**. This is not optional — it is the fundamental reason the service exists as a separate layer.
-```
+
 @Transactional
 createOrder() {
     ┌─────────────────────────────────────┐
