@@ -204,7 +204,12 @@ public class OrderServiceImpl implements OrderUseCase {
 
         if (request.status() == OrderStatus.CANCELLED) {
             order.getItems().forEach(item -> {
-                log.info("Releasing stocj for product: {} qty: {}", item.getProductId(), item.getQuantity());
+                log.info("Releasing stock for product: {} qty: {}", item.getProductId(),
+                        item.getQuantity());
+
+                inventoryClient.releaseStock(item.getProductId(),
+                        item.getQuantity());
+
             });
         }
 
