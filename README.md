@@ -345,3 +345,61 @@ If step 3 fails → entire transaction rolls back
                 → step 2 is undone automatically
                 → database is consistent
 Without @Transactional on the service, steps 2 and 3 are separate database operations. If step 3 fails, step 2 is already committed — you have a partial order in the database with no items.
+
+
+cd order-service
+mvn test
+
+# What success looks like:
+# [INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0
+# [INFO] BUILD SUCCESS
+
+# Run with detailed output to see each test name
+mvn test -Dsurefire.useFile=false
+
+# Check coverage report was generated
+open target/site/jacoco/index.html
+# Service layer should show ~90%+ coverage
+
+
+Phase 4 Complete — Final Validation
+bashmvn compile && mvn test
+
+find target/classes -name "*.class" | grep -E "service|exception" | sort
+# Should show:
+# config/exception/InsufficientStockException.class
+# config/exception/InvalidOrderStateException.class
+# config/exception/OrderNotFoundException.class
+# domain/service/OrderMapper.class
+# domain/service/OrderServiceImpl.class
+
+git add .
+git commit -m "feat(service): complete Phase 4 — service layer with passing unit tests"
+git push origin main
+```
+
+---
+
+## What You Can Now Explain in an Interview
+
+**"Why are your unit tests not using @SpringBootTest?"**
+
+Because `@SpringBootTest` boots the entire application context — security, database, Feign, all of it. That is an integration test. A unit test proves one class works in isolation. With Mockito, my 10 tests run in under 500ms total. If I used `@SpringBootTest` for these, I'd be waiting 30 seconds to test pure Java logic that has nothing to do with Spring.
+
+**"Where does your transaction boundary sit?"**
+
+On the service layer. `@Transactional` on `OrderServiceImpl` means the entire method runs in one database transaction. If saving order items fails after saving the order header, the whole transaction rolls back automatically. The controller and repository have no transaction awareness — that responsibility belongs entirely to the service.
+
+**"How do you prevent a client from sending totalAmount: 0.01 for a $500 order?"**
+
+The `CreateOrderRequest` DTO does not even have a `totalAmount` field. The client sends line items with quantities and unit prices. The service recalculates the total server-side every single time. The client never influences money calculations.
+
+---
+
+## What's Next
+Phase 5 → Persistence Adapter
+  └── OrderJpaRepository.java   (Spring Data interface)
+  └── OrderPersistenceAdapter.java  (implements domain's OrderRepository port)
+  └── V1__create_orders_table.sql
+  └── application.yml
+
