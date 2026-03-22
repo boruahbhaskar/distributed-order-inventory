@@ -102,3 +102,85 @@ Before writing a single file, understand what you're doing and why:
 │    ← JPA adapter implements OrderRepository          │
 │    ← Feign adapter implements InventoryClient        │
 └─────────────────────────────────────────────────────┘
+
+
+
+
+
+What is a DTO?
+DTO = Data Transfer Object. It is a simple object whose only job is to carry data between layers or across a network boundary. No business logic, no database annotations, just fields and their validation rules.
+WITHOUT DTO (wrong way):              WITH DTO (right way):
+
+Client sends JSON                     Client sends JSON
+      ↓                                     ↓
+Controller receives it           Controller receives CreateOrderRequest
+      ↓                                     ↓
+Passes raw Order entity          Passes CreateOrderRequest (DTO)
+to service                       to service
+      ↓                                     ↓
+Service saves Order              Service maps DTO → Order entity
+      ↓                                     ↓
+Returns Order entity             Service maps Order → OrderResponse (DTO)
+to controller                    to controller
+      ↓                                     ↓
+Controller returns               Controller returns
+Order entity as JSON             OrderResponse as JSON
+(exposes @Entity, @Column,       (exposes ONLY what client needs)
+ version fields, lazy proxies)
+
+Why You Need DTOs — 4 Concrete Reasons
+Reason 1: Protect your domain model from the outside world
+Reason 2: API contract stability
+
+Your database schema will change. Column renamed, table split, new field added.
+Without DTOs, every schema change breaks your API contract — clients have to update too.
+With DTOs, you absorb the change in the mapper layer and the API response stays identical.
+
+DB change: rename "customerId" to "customer_reference_id"
+
+Without DTO: API response field changes → client breaks
+With DTO:    Mapper reads new field name → maps to same "customerId" in response → client unaffected
+
+Reason 3: Validation belongs on input, not on entities
+@NotBlank and @Min on a JPA entity is asking the wrong layer to do the job. The entity should only care about database constraints. 
+The DTO is the right place to validate what the client sends.
+
+Reason 4: Different operations need different shapes
+
+One entity, many views of it:
+```
+Same Order entity → 4 different DTOs:
+
+CreateOrderRequest  → what client sends to CREATE  (no id, no status, no timestamps)
+UpdateOrderRequest  → what client sends to UPDATE   (no id, no timestamps)
+PatchOrderStatusRequest → what client sends to PATCH (just the status field)
+OrderResponse       → what client receives back     (everything including id, timestamps)
+```
+
+## How DTOs Fit in the Overall Flow
+```
+HTTP Request (JSON)
+      │
+      ▼
+  Controller
+  @Valid @RequestBody CreateOrderRequest  ← DTO arrives here, validation fires
+      │
+      │  passes DTO to →
+      ▼
+  OrderServiceImpl.createOrder(CreateOrderRequest)
+      │
+      │  maps DTO → domain entity (Order) internally
+      │  does business logic
+      │  saves entity
+      │  maps entity → response DTO
+      │
+      │  returns →
+      ▼
+  Controller
+  returns ResponseEntity<OrderResponse>   ← response DTO leaves here
+      │
+      ▼
+HTTP Response (JSON)
+
+
+
