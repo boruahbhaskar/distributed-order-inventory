@@ -182,5 +182,21 @@ HTTP Request (JSON)
       ▼
 HTTP Response (JSON)
 
+mvn compile
+# BUILD SUCCESS
 
+# Also manually verify the validation cascade logic makes sense:
+# Ask yourself: what happens if client sends this payload?
+#
+# Case 1: {"customerId": "", "items": [...]}
+#   → @NotBlank fires on customerId → 400 Bad Request ✅
+#
+# Case 2: {"customerId": "cust-1", "items": []}
+#   → @NotEmpty fires on items → 400 Bad Request ✅
+#
+# Case 3: {"customerId": "cust-1", "items": [{"productId":"P1","quantity":-1,"unitPrice":10}]}
+#   → @Valid cascades → @Min fires on quantity → 400 Bad Request ✅
+#
+# Case 4: {"customerId": "cust-1", "items": null}
+#   → @NotEmpty fires (covers null too) → 400 Bad Request ✅
 
