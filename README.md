@@ -585,3 +585,96 @@ If an interviewer asks about your configuration strategy, say:
 
 
 **Since your `application.yml` is now fully explained and configured, would you like to create the `V1__create_orders_table.sql` file so Flyway can actually build your tables?**
+
+Phase 5 Complete — Full End-to-End Validation
+This is the first time you run the actual application and test a real database round trip:
+bashcd order-service
+
+# Compile everything one final time
+mvn compile
+
+# Start the application
+mvn spring-boot:run
+```
+
+Watch the startup logs — you should see this exact sequence:
+```
+# 1. Flyway runs your migration
+INFO  o.f.c.i.database.base.BaseDatabaseType  : Database: jdbc:postgresql://localhost:5432/order_db
+INFO  o.f.core.internal.command.DbMigrate     : Migrating schema "order_schema" to version "1 - create orders table"
+INFO  o.f.core.internal.command.DbMigrate     : Successfully applied 1 migration to schema "order_schema"
+
+# 2. Hibernate validates schema against entities
+INFO  org.hibernate.orm.connections.pooling   : HHH10001005: Loaded properties from ...
+
+# 3. Spring Boot starts successfully
+INFO  c.e.orderservice.OrderServiceApplication : Started OrderServiceApplication in 4.2 seconds
+```
+
+**If you see this error:**
+```
+ERROR FlywayException: Validate failed:
+Migration checksum mismatch for migration version 1
+It means you edited V1__create_orders_table.sql after it was already applied. Fix: drop and recreate the schema:
+bashdocker exec -it order-postgres psql -U orderuser -d order_db \
+  -c "DROP SCHEMA order_schema CASCADE; CREATE SCHEMA order_schema;"
+# Then restart the app — Flyway runs V1 fresh
+Test with a real HTTP call:
+bash# App is running on :8080 — test the health endpoint first
+curl http://localhost:8080/actuator/health | jq .
+
+# Expected:
+# {
+#   "status": "UP",
+#   "components": {
+#     "db": { "status": "UP" },    ← PostgreSQL connected
+#     "diskSpace": { "status": "UP" }
+#   }
+# }
+Verify Flyway created the tables correctly:
+bashdocker exec -it order-postgres psql -U orderuser -d order_db
+
+# Inside psql:
+\dt order_schema.*
+# Lists: orders, order_items
+
+\d order_schema.orders
+# Shows all columns, types, constraints
+
+SELECT * FROM flyway_schema_history;
+# Shows migration history — V1 should appear as "success"
+
+\q
+bashgit add .
+git commit -m "feat(persistence): complete Phase 5 — persistence adapter, app starts and connects to DB"
+git push origin main
+```
+
+---
+
+## What You Can Now Explain in an Interview
+
+**"Why does OrderPersistenceAdapter exist if it just delegates to JpaRepository?"**
+
+Right now it looks like a pass-through, but it earns its place in three ways. First, the service depends on a domain interface — not a Spring Data interface — so you can test the service with a simple mock. Second, if you switch to MongoDB tomorrow, you write a `MongoOrderPersistenceAdapter` and change one Spring bean — the service and its tests are completely untouched. Third, the adapter is the right place to add cross-cutting persistence concerns like soft-delete logic, audit logging, or caching — without polluting the service or the JPA interface.
+
+**"Why use `ddl-auto: validate` instead of `create` or `update`?"**
+
+`create` destroys your data on every startup. `update` tries to auto-generate ALTER TABLE statements — Hibernate gets it wrong frequently, especially for column renames or type changes. `validate` is the only safe production setting. Flyway owns schema changes through versioned SQL scripts that are code-reviewed, tested, and auditable. Hibernate only checks that the entity mappings match what Flyway created. If they don't match, the app refuses to start — which is exactly what you want.
+
+**"Why `open-in-view: false`?"**
+
+Spring Boot defaults this to `true`, which keeps the Hibernate session alive for the entire HTTP request including view rendering. This silently enables lazy loading outside your `@Transactional` boundaries. You get queries you never wrote, never tested, and never profiled — often discovered under production load. Setting it to `false` makes lazy loading outside a transaction throw immediately, which forces you to fetch exactly what you need inside the service and makes the system predictable.
+
+---
+
+## What's Next
+```
+Phase 6 → Controller + Global Exception Handler
+  └── GlobalExceptionHandler.java
+  └── OrderController.java
+  └── Integration test with Testcontainers
+  (First time the full request → service → DB → response flow runs)
+
+Phase 6.5 → JWT + Swagger
+  (Added immediately after controller works)
