@@ -376,7 +376,7 @@ find target/classes -name "*.class" | grep -E "service|exception" | sort
 git add .
 git commit -m "feat(service): complete Phase 4 — service layer with passing unit tests"
 git push origin main
-```
+
 
 ---
 
@@ -403,3 +403,118 @@ Phase 5 → Persistence Adapter
   └── V1__create_orders_table.sql
   └── application.yml
 
+What is a Persistence Adapter?
+It is the bridge between your domain world and the database world. It translates domain language into database operations and back.
+DOMAIN WORLD                    DATABASE WORLD
+(pure Java, no framework)       (JPA, Hibernate, PostgreSQL)
+
+OrderRepository interface  →→→  OrderPersistenceAdapter  →→→  OrderJpaRepository
+(what the service needs)        (the bridge/translator)        (Spring Data JPA)
+                                                               (actual SQL)
+Think of it like a power adapter when you travel:
+Your laptop (domain)  →  Power Adapter  →  Wall socket (database)
+
+Your laptop doesn't know or care what country's socket it is.
+The adapter handles the conversion.
+Same principle here.
+
+Why Does This Layer Exist Separately?
+Without it, your service would directly use Spring Data JPA:
+java// WITHOUT persistence adapter — wrong way
+@Service
+public class OrderServiceImpl {
+
+    // Service directly depends on JPA repository
+    private final OrderJpaRepository jpaRepository;  // ← Spring Data JPA
+
+    public OrderResponse createOrder(...) {
+        jpaRepository.save(order);  // ← JPA leaks into domain
+    }
+}
+```
+
+**Three problems this creates:**
+
+### Problem 1 — Domain depends on framework
+
+`OrderJpaRepository` extends `JpaRepository` which is a Spring Data interface. Your domain layer now has a compile-time dependency on Spring Data JPA. You cannot use your domain without Spring. You cannot test your service without a database.
+
+### Problem 2 — Cannot swap database technology
+
+If you want to move from PostgreSQL to MongoDB or DynamoDB, you have to change `OrderServiceImpl` — the brain of your application — to swap database libraries. A domain change should never be caused by an infrastructure decision.
+
+### Problem 3 — Spring Data methods leak into domain
+
+`JpaRepository` gives you methods like `flush()`, `saveAndFlush()`, `findAllById()`, `getOne()` — database-specific concepts that have no business meaning. Your domain port only exposes what the domain needs: `save`, `findById`, `findAll`, `existsById`, `deleteById`. Clean, meaningful, no database noise.
+
+---
+
+## How These Three Files Relate to Each Other
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    WHAT EACH FILE DOES                          │
+│                                                                 │
+│  OrderJpaRepository.java                                        │
+│  ─────────────────────                                          │
+│  A Spring Data interface. You write ZERO implementation.        │
+│  Spring generates the SQL at startup automatically.             │
+│  Extends JpaRepository → gets save/find/delete for free.        │
+│                                                                 │
+│  OrderPersistenceAdapter.java                                   │
+│  ────────────────────────────                                   │
+│  Implements domain's OrderRepository port.                      │
+│  Wraps OrderJpaRepository internally.                           │
+│  This is the only class that knows about both worlds.           │
+│  Service never sees JpaRepository — only this adapter.          │
+│                                                                 │
+│  V1__create_orders_table.sql                                    │
+│  ───────────────────────────                                    │
+│  Flyway migration. Runs once at startup to create the schema.   │
+│  Version controlled. Never changes once applied.                │
+│  The ground truth for your database structure.                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## The Full Call Chain — With Persistence Adapter
+```
+POST /api/v1/orders
+        │
+        ▼
+OrderController.createOrder(CreateOrderRequest)
+        │  calls
+        ▼
+OrderServiceImpl.createOrder(CreateOrderRequest)      ← domain layer
+        │  calls orderRepository.save(order)
+        │  (orderRepository is the PORT INTERFACE)
+        ▼
+OrderPersistenceAdapter.save(Order)                   ← adapter layer
+        │  calls jpaRepository.save(order)
+        ▼
+OrderJpaRepository.save(Order)                        ← infrastructure layer
+        │  Hibernate generates SQL
+        ▼
+PostgreSQL                                            ← database
+        │  executes: INSERT INTO order_schema.orders ...
+        │  returns saved row
+        ▼
+(result travels back up the chain)
+The service never crosses below the port interface line. It calls orderRepository.save() and does not know or care whether the implementation is JPA, MongoDB, an HTTP call, or an in-memory HashMap.
+
+Pre-Step — Start PostgreSQL Before Writing Code
+You need a running database to validate this phase end-to-end:
+bash# Start only the databases from docker-compose
+docker-compose up -d order-postgres
+
+# Verify it is running
+docker ps | grep order-postgres
+
+# Connect to verify (optional but good habit)
+docker exec -it order-postgres psql -U orderuser -d order_db
+# Inside psql:
+# \conninfo    → shows connection info
+# \q           → quit
+
+Step 1 — V1__create_orders_table.sql
+Create this file before the Java code because Flyway runs it at startup and JPA validates against it:
