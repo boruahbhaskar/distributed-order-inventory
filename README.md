@@ -431,7 +431,7 @@ public class OrderServiceImpl {
         jpaRepository.save(order);  // ← JPA leaks into domain
     }
 }
-```
+
 
 **Three problems this creates:**
 
@@ -450,7 +450,7 @@ If you want to move from PostgreSQL to MongoDB or DynamoDB, you have to change `
 ---
 
 ## How These Three Files Relate to Each Other
-```
+
 ┌─────────────────────────────────────────────────────────────────┐
 │                    WHAT EACH FILE DOES                          │
 │                                                                 │
@@ -473,12 +473,12 @@ If you want to move from PostgreSQL to MongoDB or DynamoDB, you have to change `
 │  Version controlled. Never changes once applied.                │
 │  The ground truth for your database structure.                  │
 └─────────────────────────────────────────────────────────────────┘
-```
+
 
 ---
 
 ## The Full Call Chain — With Persistence Adapter
-```
+
 POST /api/v1/orders
         │
         ▼
@@ -518,3 +518,18 @@ docker exec -it order-postgres psql -U orderuser -d order_db
 
 Step 1 — V1__create_orders_table.sql
 Create this file before the Java code because Flyway runs it at startup and JPA validates against it:
+
+Validate SQL
+bash# Apply the migration manually to check SQL syntax
+docker exec -i order-postgres psql -U orderuser -d order_db < \
+  order-service/src/main/resources/db/migration/V1__create_orders_table.sql
+
+# Verify tables were created
+docker exec -it order-postgres psql -U orderuser -d order_db -c \
+  "\dt order_schema.*"
+
+# Expected output:
+#             List of relations
+#   Schema      |    Name     | Type  |   Owner
+# order_schema  | order_items | table | orderuser
+# order_schema  | orders      | table | orderuser
