@@ -49,6 +49,29 @@ public class OrderServiceImpl implements OrderUseCase {
 
     // ---------------- CREATE -----------------
 
+    // TRANSACTIONAL BOUNDARY EXPLANATION (for interviews):
+    //
+    // This method is @Transactional. The sequence is:
+    // 1. Build Order entity (in-memory, no DB call yet)
+    // 2. Call inventoryClient.reserveStock() — this is an OUTBOUND HTTP
+    // call to Inventory-Service. It is NOT in our DB transaction.
+    // 3. Save order to DB — DB transaction commits here.
+    //
+    // PROBLEM: If step 3 fails after step 2 succeeds, we've reserved
+    // inventory but have no order. This is a distributed consistency gap.
+    //
+    // SOLUTION OPTIONS:
+    // a) Saga Pattern (Choreography): Order-Service publishes an
+    // ORDER_CREATED event; Inventory-Service listens and reserves.
+    // If Order save fails, publish ORDER_FAILED event to release stock.
+    // b) Two-Phase Commit (2PC): Distributed transaction. Works but
+    // introduces coupling and performance bottlenecks.
+    // c) Outbox Pattern: Write order + inventory reservation command to
+    // same DB transaction. A separate process publishes the command.
+    //
+    // FOR THIS PROJECT: We use approach (a) partially — the circuit breaker
+    // ensures we don't save the order if inventory reservation fails.
+
     @Override
     public OrderResponse createOrder(CreateOrderRequest request) {
 
@@ -59,6 +82,7 @@ public class OrderServiceImpl implements OrderUseCase {
         // order in the DB with no reserved stock - a phantom order
         // Reserving first means a failure leaves no DB record to clean up
 
+        // Step 1: Reserve inventory (circuit breaker protects this call)
         request.items().forEach(item -> {
             log.debug("Reserving stock for product: {}, qty: {}", item.productId(), item.quantity());
 
@@ -79,6 +103,8 @@ public class OrderServiceImpl implements OrderUseCase {
          * totalAmount = 0.01 for a $500 order.
          * Always recalculate on the server from the line items
          */
+
+        // Step 2: Build domain entity
 
         BigDecimal total = request.items().stream()
                 .map(item -> item.unitPrice()
@@ -107,6 +133,7 @@ public class OrderServiceImpl implements OrderUseCase {
         order.getItems().addAll(items);
 
         // Persist - CascadeType.ALL saves order + all items in one transaction
+        // Step 3: Persist — transaction commits here
 
         Order saved = orderRepository.save(order);
         log.info("Order created successfully with id: {}", saved.getId());
@@ -195,6 +222,10 @@ public class OrderServiceImpl implements OrderUseCase {
          * setStatus() bypasses it - any code could set any status directly.
          * Business rules must be enforced at the domain level, not hoped for at the
          * caller level
+         * 
+         * // Domain method enforces the state machine — no raw setStatus() here.
+         * // WHY: Business rule enforcement lives in the domain, not the service.
+         * // This prevents the service layer from bypassing invariants.
          * 
          */
 
