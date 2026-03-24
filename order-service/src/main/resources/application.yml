@@ -1,0 +1,122 @@
+# src/main/resources/application.yml
+
+spring:
+    application:
+        name: order-service
+
+    # ── Database ───────────────────────────────────────────────────────────────
+    datasource:
+        url: jdbc:postgresql://localhost:5432/order_db
+        username: ${DB_USERNAME:orderuser}
+        # WHY ${DB_USERNAME:orderuser} syntax:
+        #   If env var DB_USERNAME exists, use it.
+        #   Otherwise fall back to "orderuser".
+        #   In production (EKS), env vars come from Kubernetes secrets.
+        #   Locally, the fallback value is used. Zero code change between envs.
+        password: ${DB_PASSWORD:orderpass}
+
+        hikari:
+            # WHY HikariCP settings matter:
+            #   HikariCP is the connection pool — it maintains open connections
+            #   to PostgreSQL so each request doesn't pay the cost of creating
+            #   a new TCP connection (typically 50-100ms).
+            pool-name: OrderServicePool
+            maximum-pool-size: 10
+            # WHY 10: PostgreSQL default max_connections is 100.
+            # With 2 services × 10 = 20 connections used, leaving 80 for tools,
+            # migrations, and headroom. Never set this to 50+ without checking.
+            minimum-idle: 2
+            connection-timeout: 30000 # 30s — fail fast if pool exhausted
+            idle-timeout: 600000 # 10m — return idle connections to pool
+            max-lifetime: 1800000 # 30m — recycle connections (avoids stale TCP)
+            connection-test-query: SELECT 1
+
+    # ── JPA / Hibernate ────────────────────────────────────────────────────────
+    jpa:
+        hibernate:
+            ddl-auto: validate
+            # WHY validate not create or update:
+            #   "create" drops and recreates tables on every startup → data loss
+            #   "update" tries to auto-migrate schema → unpredictable in production
+            #   "validate" checks that entity mappings match the schema Flyway created.
+            #   If they don't match, startup FAILS immediately with a clear error.
+            #   This is your safety net — catches mapping mistakes before any request.
+        show-sql: false
+        # WHY false: SQL logging in production fills logs with noise.
+        # Enable only locally when debugging a specific query.
+        open-in-view: false
+        # WHY false (CRITICAL):
+        #   open-in-view = true (Spring Boot default!) keeps the Hibernate session
+        #   open for the entire HTTP request lifecycle — including after the service
+        #   method returns. This means lazy collections can be loaded in the view
+        #   layer, causing N+1 queries you never see in tests.
+        #   Setting false forces all DB access to happen inside @Transactional
+        #   boundaries where you can see and control it.
+        properties:
+            hibernate:
+                default_schema: order_schema
+                dialect: org.hibernate.dialect.PostgreSQLDialect
+                format_sql: false
+                jdbc:
+                    batch_size: 25
+                    # WHY batch_size: When saving a list of OrderItems, Hibernate
+                    # can batch INSERT statements instead of firing one per item.
+                    # 25 items = 1 batch instead of 25 round trips to the DB.
+                order_inserts: true # Required for batching to work with FK relationships
+                order_updates: true
+
+    # ── Flyway ─────────────────────────────────────────────────────────────────
+    flyway:
+        enabled: true
+        schemas: order_schema
+        locations: classpath:db/migration
+        baseline-on-migrate: false
+        # WHY baseline-on-migrate false:
+        #   baseline-on-migrate = true marks existing schema as "already migrated"
+        #   and starts from V2 onward. Only use when adding Flyway to an existing DB.
+        #   For a fresh DB, always false — run all migrations from V1.
+        validate-on-migrate: true # Checksum verification — detects edited migrations
+
+# ── Actuator & Observability ───────────────────────────────────────────────
+management:
+    endpoints:
+        web:
+            exposure:
+                include: health, info, prometheus, metrics, circuitbreakers
+    endpoint:
+        health:
+            show-details: always
+    metrics:
+        distribution:
+            percentiles-histogram:
+                http.server.requests: true
+
+# ── Inventory Service URL (for Feign — used in Phase 7) ───────────────────
+inventory-service:
+    url: ${INVENTORY_SERVICE_URL:http://localhost:8081}
+
+# ── JWT (from previous session) ───────────────────────────────────────────
+app:
+    jwt:
+        secret-key: "404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970"
+        access-token-expiry: 900000
+        refresh-token-expiry: 86400000
+
+# ── Springdoc / Swagger ────────────────────────────────────────────────────
+springdoc:
+    swagger-ui:
+        path: /swagger-ui.html
+        operations-sorter: method
+    api-docs:
+        path: /v3/api-docs
+
+# ── Logging ────────────────────────────────────────────────────────────────
+logging:
+    level:
+        com.example.orderservice: INFO
+        org.flywaydb: INFO # Shows migration steps at startup
+        org.hibernate.SQL: OFF # Turn to DEBUG when debugging a query locally
+        com.zaxxer.hikari: INFO # Shows pool startup and connection events
+
+server:
+    port: 8080
