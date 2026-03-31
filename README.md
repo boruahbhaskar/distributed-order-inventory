@@ -595,10 +595,10 @@ mvn compile
 
 # Start the application
 mvn spring-boot:run
-```
+
 
 Watch the startup logs — you should see this exact sequence:
-```
+
 # 1. Flyway runs your migration
 INFO  o.f.c.i.database.base.BaseDatabaseType  : Database: jdbc:postgresql://localhost:5432/order_db
 INFO  o.f.core.internal.command.DbMigrate     : Migrating schema "order_schema" to version "1 - create orders table"
@@ -609,10 +609,10 @@ INFO  org.hibernate.orm.connections.pooling   : HHH10001005: Loaded properties f
 
 # 3. Spring Boot starts successfully
 INFO  c.e.orderservice.OrderServiceApplication : Started OrderServiceApplication in 4.2 seconds
-```
+
 
 **If you see this error:**
-```
+
 ERROR FlywayException: Validate failed:
 Migration checksum mismatch for migration version 1
 It means you edited V1__create_orders_table.sql after it was already applied. Fix: drop and recreate the schema:
@@ -648,7 +648,6 @@ SELECT * FROM flyway_schema_history;
 bashgit add .
 git commit -m "feat(persistence): complete Phase 5 — persistence adapter, app starts and connects to DB"
 git push origin main
-```
 
 ---
 
@@ -669,7 +668,7 @@ Spring Boot defaults this to `true`, which keeps the Hibernate session alive for
 ---
 
 ## What's Next
-```
+
 Phase 6 → Controller + Global Exception Handler
   └── GlobalExceptionHandler.java
   └── OrderController.java
@@ -678,3 +677,170 @@ Phase 6 → Controller + Global Exception Handler
 
 Phase 6.5 → JWT + Swagger
   (Added immediately after controller works)
+
+
+What is the Controller Layer?
+It is the front door of your application. It is the first thing that receives an HTTP request and the last thing that sends an HTTP response. It does exactly three things and nothing more:
+1. RECEIVE    — accept the HTTP request, deserialize JSON into a DTO
+2. DELEGATE   — hand the DTO to the service, get a response DTO back
+3. RESPOND    — wrap the response in the correct HTTP status and return
+That is it. No business logic. No database calls. No calculations. If you find yourself writing an if statement in a controller that is not about HTTP concerns, that logic belongs in the service.
+
+What is the Global Exception Handler?
+It is the safety net for your entire application. When anything goes wrong anywhere in the call chain, the exception travels up through every layer until something catches it. Without a global handler, Spring catches it and returns a generic error response that exposes internal details and has no consistent structure.
+OrderController.createOrder()
+      │
+      calls
+      │
+      ▼
+OrderServiceImpl.createOrder()
+      │
+      throws OrderNotFoundException
+      │
+      ↑ exception bubbles up
+      │
+OrderController — does NOT catch it
+      │
+      ↑ continues bubbling
+      │
+GlobalExceptionHandler ← catches it HERE
+      │
+      returns structured JSON error response
+      with correct HTTP status code
+
+Why These Two Files Are a Pair
+They are designed together. The controller defines what can go wrong. The handler defines what the client sees when it does.
+CONTROLLER                          EXCEPTION HANDLER
+──────────                          ─────────────────
+@PostMapping createOrder()    ───▶  handles MethodArgumentNotValidException
+  └── @Valid fires                  returns 400 with all field errors
+
+@GetMapping getOrderById()    ───▶  handles OrderNotFoundException
+  └── service throws               returns 404 with order id in message
+
+@PatchMapping patchStatus()   ───▶  handles IllegalStateException
+  └── domain throws                returns 409 with transition details
+
+@PostMapping createOrder()    ───▶  handles InsufficientStockException
+  └── inventory says no            returns 422 with product id
+
+Any endpoint                  ───▶  handles Exception (catch-all)
+  └── anything unexpected          returns 500 with no internal details
+
+Why the Controller Must Be Thin — A Visual
+java// FAT CONTROLLER — wrong, seen in many projects
+@PostMapping
+public ResponseEntity<?> createOrder(@RequestBody CreateOrderRequest request) {
+    // Validation logic — belongs in DTO + handler
+    if (request.customerId() == null || request.customerId().isBlank()) {
+        return ResponseEntity.badRequest().body("customerId required");
+    }
+    // Business logic — belongs in service
+    BigDecimal total = request.items().stream()
+        .map(i -> i.unitPrice().multiply(BigDecimal.valueOf(i.quantity())))
+        .reduce(BigDecimal.ZERO, BigDecimal::add);
+    // Database logic — belongs in repository
+    Order order = new Order();
+    order.setTotalAmount(total);
+    orderJpaRepository.save(order);
+    return ResponseEntity.ok(order);  // exposes JPA entity — wrong
+}
+
+// THIN CONTROLLER — right
+@PostMapping
+public ResponseEntity<OrderResponse> createOrder(
+        @Valid @RequestBody CreateOrderRequest request) {
+    OrderResponse created = orderUseCase.createOrder(request);  // one line
+    URI location = buildLocation(created.id());
+    return ResponseEntity.created(location).body(created);
+}
+
+
+---
+
+## How These Files Fit in the Full Flow
+
+HTTP Request: POST /api/v1/orders
+{
+  "customerId": "cust-123",
+  "items": [{"productId":"PROD-1","quantity":2,"unitPrice":29.99}]
+}
+        │
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  SECURITY FILTER (Phase 6.5)                          │
+│  Validates JWT token                                  │
+│  Sets authentication in SecurityContext               │
+└───────────────────────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  DISPATCHER SERVLET                                   │
+│  Routes request to OrderController                    │
+└───────────────────────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  BEAN VALIDATION (@Valid fires here)                  │
+│  Runs @NotBlank, @NotEmpty, @Min on DTO               │
+│  If fails → MethodArgumentNotValidException thrown    │
+│  → GlobalExceptionHandler catches → 400 response      │
+└───────────────────────────────────────────────────────┘
+        │ (if validation passes)
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  OrderController.createOrder()                        │
+│  Calls orderUseCase.createOrder(request)              │
+└───────────────────────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  OrderServiceImpl.createOrder()      @Transactional   │
+│  Calls inventoryClient.reserveStock()                 │
+│  Calculates total                                     │
+│  Builds Order entity                                  │
+│  Calls orderRepository.save()                         │
+└───────────────────────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  OrderPersistenceAdapter.save()                       │
+│  Calls jpaRepository.save()                           │
+│  Hibernate generates INSERT SQL                       │
+│  PostgreSQL executes                                  │
+└───────────────────────────────────────────────────────┘
+        │ (result travels back up)
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  OrderController receives OrderResponse               │
+│  Builds 201 Created with Location header              │
+│  Returns ResponseEntity<OrderResponse>                │
+└───────────────────────────────────────────────────────┘
+        │
+        ▼
+HTTP Response: 201 Created
+Location: /api/v1/orders/uuid-here
+{
+  "id": "uuid",
+  "customerId": "cust-123",
+  "status": "PENDING",
+  "totalAmount": 59.98,
+  ...
+}
+
+
+---
+
+## Why Integration Tests Here — Not Earlier
+
+Up to Phase 5 you tested in isolation. Unit tests proved the service logic works. But they could not prove:
+
+❓ Does the HTTP routing work?        → needs controller
+❓ Does @Valid actually fire?         → needs controller + Spring context
+❓ Does the JSON deserialize?         → needs Jackson + controller
+❓ Does Flyway run migrations?        → needs real database
+❓ Does JPA generate correct SQL?     → needs real database
+❓ Does the full 201 Created flow?    → needs everything together
+
+Integration test with Testcontainers proves ALL of these
+in one test run against a real PostgreSQL container.
