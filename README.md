@@ -844,3 +844,109 @@ Up to Phase 5 you tested in isolation. Unit tests proved the service logic works
 
 Integration test with Testcontainers proves ALL of these
 in one test run against a real PostgreSQL container.
+
+
+ Smoke Test Before Integration Tests
+Start the app and hit every endpoint manually:
+bashcd order-service
+mvn spring-boot:run
+
+# In a separate terminal:
+
+# Test 1: Health check
+curl -s http://localhost:8080/actuator/health | jq .
+# Expected: {"status":"UP"}
+
+# Test 2: POST — create an order
+curl -s -X POST http://localhost:8080/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerId": "cust-123",
+    "items": [
+      {"productId":"PROD-1","quantity":2,"unitPrice":29.99}
+    ]
+  }' | jq .
+# Expected: 201 with order JSON
+
+# Save the returned id
+ORDER_ID="paste-uuid-here"
+
+# Test 3: GET single order
+curl -s http://localhost:8080/api/v1/orders/$ORDER_ID | jq .
+# Expected: 200 with order JSON
+
+# Test 4: GET all orders (paginated)
+curl -s "http://localhost:8080/api/v1/orders?page=0&size=5" | jq .
+# Expected: 200 with Page wrapper
+
+# Test 5: PATCH status
+curl -s -X PATCH http://localhost:8080/api/v1/orders/$ORDER_ID/status \
+  -H "Content-Type: application/json" \
+  -d '{"status":"CONFIRMED"}' | jq .
+# Expected: 200, status now CONFIRMED
+
+# Test 6: PATCH invalid transition
+curl -s -X PATCH http://localhost:8080/api/v1/orders/$ORDER_ID/status \
+  -H "Content-Type: application/json" \
+  -d '{"status":"PENDING"}' | jq .
+# Expected: 409 Conflict
+
+# Test 7: Validation error — missing customerId
+curl -s -X POST http://localhost:8080/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customerId":"","items":[]}' | jq .
+# Expected: 400 with validationErrors showing both field errors
+
+# Test 8: Not found
+curl -s http://localhost:8080/api/v1/orders/00000000-0000-0000-0000-000000000000 | jq .
+# Expected: 404
+
+# Test 9: DELETE
+curl -s -X DELETE http://localhost:8080/api/v1/orders/$ORDER_ID
+# Expected: 204 No Content (empty body)
+
+# Test 10: DELETE again (already gone)
+curl -s -X DELETE http://localhost:8080/api/v1/orders/$ORDER_ID | jq .
+# Expected: 404
+
+
+### Run Integration Tests
+bashcd order-service
+
+# Make sure Docker is running first — Testcontainers needs it
+docker info
+
+# Run only integration tests
+mvn test -Dtest=OrderControllerIntegrationTest
+
+# What you should see:
+# Testcontainers starts PostgreSQL container (~10s)
+# Flyway runs V1 migration on the container
+# Spring context loads
+# 11 tests run against real DB
+# Container stops
+# BUILD SUCCESS
+
+# Full output with test names
+mvn test -Dtest=OrderControllerIntegrationTest -Dsurefire.useFile=false
+
+
+Complete — Final Validation
+bashcd order-service
+
+# Run everything — unit tests + integration tests + coverage
+mvn verify
+
+# Expected:
+# Unit tests (OrderServiceTest):        ~10 tests, <1s
+# Integration tests (OrderControllerIntegrationTest): ~11 tests, ~15s
+# JaCoCo coverage report generated
+# BUILD SUCCESS
+
+# Open coverage report
+open target/site/jacoco/index.html
+# Controller + Service should show >80% coverage combined
+
+git add .
+git commit -m "feat(controller): complete Phase 6 — controller, exception handler, integration tests passing"
+git push origin main
